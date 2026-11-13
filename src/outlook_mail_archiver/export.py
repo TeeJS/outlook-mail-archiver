@@ -54,6 +54,8 @@ _DEGRADED_PREFIXES = (
     "sender-smtp-unresolved",        # no usable sender address
     "inline-fallback",               # an inline image could not be anchored
     "inline-without-html",           # inline images with no HTML to attach to
+    "attachment-unreadable",         # an attachment could not be read (dropped)
+    "attachments-unreadable",        # the attachment list could not be read
 )
 
 

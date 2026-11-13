@@ -238,34 +238,44 @@ def _to_dt(value) -> datetime | None:
             return None
 
 
-def _extract_attachments(mail) -> list[AttachmentData]:
+def _extract_attachments(mail) -> tuple[list[AttachmentData], list[str]]:
+    """Return (attachments, warnings).
+
+    An attachment that cannot be read (an OLE/embedded object, or a file that
+    vanished from temp — e.g. quarantined by endpoint protection) is SKIPPED
+    with a warning, never fatal: the message is still archived, flagged as
+    missing that attachment.
+    """
     out: list[AttachmentData] = []
+    warnings: list[str] = []
     attachments = mail.Attachments
-    count = attachments.Count
+    try:
+        count = attachments.Count
+    except Exception as exc:
+        return out, [f"attachments-unreadable: {exc}"]
     if count == 0:
-        return out
+        return out, warnings
     tmpdir = tempfile.mkdtemp(prefix="oma_att_")
     try:
         for i in range(1, count + 1):
-            att = attachments.Item(i)
-            filename = getattr(att, "FileName", None) or f"attachment_{i}.bin"
-            content_id = _get_prop(att.PropertyAccessor, PR_ATTACH_CONTENT_ID)
-            hidden = _get_prop(att.PropertyAccessor, PR_ATTACHMENT_HIDDEN)
-            inline = bool(content_id) or bool(hidden)
-            safe = "".join(c for c in filename if c not in '\\/:*?"<>|') or f"att_{i}.bin"
-            tmp_path = os.path.join(tmpdir, f"{i}_{safe}")
             try:
+                att = attachments.Item(i)
+                filename = getattr(att, "FileName", None) or f"attachment_{i}.bin"
+                content_id = _get_prop(att.PropertyAccessor, PR_ATTACH_CONTENT_ID)
+                hidden = _get_prop(att.PropertyAccessor, PR_ATTACHMENT_HIDDEN)
+                inline = bool(content_id) or bool(hidden)
+                safe = "".join(c for c in filename if c not in '\\/:*?"<>|') or f"att_{i}.bin"
+                tmp_path = os.path.join(tmpdir, f"{i}_{safe}")
                 att.SaveAsFile(tmp_path)
                 with open(tmp_path, "rb") as fh:
                     data = fh.read()
+                out.append(AttachmentData(
+                    filename=filename, data=data,
+                    content_id=content_id, inline=inline,
+                ))
             except Exception as exc:
-                raise OutlookError(
-                    f"attachment {filename!r} could not be read: {exc}"
-                ) from exc
-            out.append(AttachmentData(
-                filename=filename, data=data,
-                content_id=content_id, inline=inline,
-            ))
+                name = locals().get("filename", f"attachment_{i}")
+                warnings.append(f"attachment-unreadable:{name}: {exc}")
     finally:
         for fn in os.listdir(tmpdir):
             try:
@@ -276,13 +286,27 @@ def _extract_attachments(mail) -> list[AttachmentData]:
             os.rmdir(tmpdir)
         except OSError:
             pass
-    return out
+    return out, warnings
 
 
 def extract_message(mail) -> MessageData:
     """Detach one Outlook item into plain data. May raise OutlookError."""
     pa = mail.PropertyAccessor
     message_class = getattr(mail, "MessageClass", "") or ""
+    is_mail_item = str(message_class).startswith("IPM.Note")
+
+    # Non-mail items (calendar, contacts, tasks) are recorded and then skipped by
+    # the exporter, so we do not run the heavy, fragile extraction (recipients,
+    # body, attachments) on them — many carry OLE attachments that cannot be
+    # saved to a file and would otherwise fail the whole item.
+    if not is_mail_item:
+        return MessageData(
+            entry_id=getattr(mail, "EntryID", ""),
+            message_class=message_class,
+            subject=getattr(mail, "Subject", "") or "",
+            sender_name=getattr(mail, "SenderName", "") or "",
+            sender_smtp="",
+        )
 
     to, cc, bcc = [], [], []
     warnings: list[str] = []
@@ -309,8 +333,11 @@ def extract_message(mail) -> MessageData:
     except Exception as exc:
         warnings.append(f"recipients-enumeration-failed: {exc}")
 
-    if mail.MessageClass and "SMIME" in str(message_class).upper():
+    if "SMIME" in str(message_class).upper():
         warnings.append(f"smime-item:{message_class}")
+
+    attachments, att_warnings = _extract_attachments(mail)
+    warnings.extend(att_warnings)
 
     return MessageData(
         entry_id=getattr(mail, "EntryID", ""),
@@ -326,7 +353,7 @@ def extract_message(mail) -> MessageData:
         text_body=getattr(mail, "Body", "") or "",
         internet_message_id=_get_prop(pa, PR_INTERNET_MESSAGE_ID) or "",
         transport_headers=_get_prop(pa, PR_TRANSPORT_MESSAGE_HEADERS) or "",
-        attachments=_extract_attachments(mail),
+        attachments=attachments,
     )
 
 
