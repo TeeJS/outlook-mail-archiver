@@ -61,6 +61,46 @@ def _is_degraded(notes: list[str]) -> bool:
     return any(str(n).startswith(_DEGRADED_PREFIXES) for n in notes)
 
 
+class _RollingZip:
+    """Writes .eml entries across one or more ZIP parts, each kept under a byte
+    cap so every part can be uploaded through a size-limited web form.
+
+    Part 1 is ``messages.zip`` (so small exports look unchanged); later parts are
+    ``messages-02.zip``, ``messages-03.zip``, … A single message is never split:
+    if it alone exceeds the cap it still goes in its own part.
+    """
+
+    def __init__(self, pkg: Path, cap_bytes: int):
+        self.pkg = pkg
+        self.cap = max(1, cap_bytes)
+        self.part = 0
+        self.zf = None
+        self.bytes = 0
+        self.parts: list[str] = []
+        self._open_next()
+
+    def _open_next(self) -> None:
+        if self.zf is not None:
+            self.zf.close()
+        self.part += 1
+        name = "messages.zip" if self.part == 1 else f"messages-{self.part:02d}.zip"
+        self.zf = ZipFile(self.pkg / name, "w", ZIP_DEFLATED)
+        self.bytes = 0
+        self.parts.append(name)
+
+    def write(self, arcname: str, data: bytes) -> str:
+        if self.bytes > 0 and self.bytes + len(data) > self.cap:
+            self._open_next()
+        self.zf.writestr(arcname, data)
+        self.bytes += len(data)
+        return self.parts[-1]
+
+    def close(self) -> None:
+        if self.zf is not None:
+            self.zf.close()
+            self.zf = None
+
+
 @dataclass
 class ExportSummary:
     package_dir: Path | None = None
@@ -102,7 +142,8 @@ def _resolve_targets(store, specs: list[str]) -> list[tuple[list[str], object, s
 
 
 def run_export(config: Config, *, incremental: bool | None = None,
-               full_sweep: bool = False, archive_client=None) -> ExportSummary:
+               full_sweep: bool = False, archive_client=None,
+               max_zip_bytes: int | None = None) -> ExportSummary:
     if not config.export.folders:
         raise ValueError(
             "No folders selected for export. Set export.folders in config.toml "
@@ -142,8 +183,8 @@ def run_export(config: Config, *, incremental: bool | None = None,
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     pkg = staging / f"export-{stamp}"
     pkg.mkdir(parents=True, exist_ok=False)
-    zip_part = pkg / "messages.zip.part"
     manifest_part = pkg / "manifest.json.part"
+    cap_bytes = max_zip_bytes if max_zip_bytes is not None else config.export.max_zip_gb * 1024**3
 
     summary = ExportSummary(package_dir=pkg)
     messages: list[dict] = []
@@ -155,10 +196,11 @@ def run_export(config: Config, *, incremental: bool | None = None,
         "excluded by selection."
     )
 
+    rz = _RollingZip(pkg, cap_bytes)
     with outlook_session(config.outlook_store) as (_ns, store):
         store_name = store.DisplayName
         targets = _resolve_targets(store, config.export.folders)
-        with ZipFile(zip_part, "w", ZIP_DEFLATED) as zf:
+        try:
             for segments, folder, disp in targets:
                 if folder is None:
                     summary.failed += 1
@@ -262,7 +304,7 @@ def run_export(config: Config, *, incremental: bool | None = None,
                         (entry_id or mid).encode("utf-8")).hexdigest()
                     name = _safe_name(md.subject, msg_hash, seq)
                     arc = f"{folder_zip}/{name}" if folder_zip else name
-                    zf.writestr(arc, eml_bytes)
+                    zip_file = rz.write(arc, eml_bytes)
 
                     summary.exported += 1
                     counts["exported"] += 1
@@ -273,6 +315,7 @@ def run_export(config: Config, *, incremental: bool | None = None,
                     messages.append({
                         "folder": disp,
                         "zip_path": arc,
+                        "zip_file": zip_file,
                         "message_id": mid,
                         "entry_id": entry_id,
                         "generated_id": info["generated_id"],
@@ -289,6 +332,8 @@ def run_export(config: Config, *, incremental: bool | None = None,
                     })
 
                 summary.per_folder[disp] = counts
+        finally:
+            rz.close()
 
     manifest = {
         "manifest_version": MANIFEST_VERSION,
@@ -317,6 +362,7 @@ def run_export(config: Config, *, incremental: bool | None = None,
             "full_sweep": bool(full_sweep),
             "window_from": window_from.isoformat() if window_from else None,
         },
+        "zip_parts": rz.parts,
         "per_folder": summary.per_folder,
         "conflicts": conflicts_list,
         "errors": summary.errors,
@@ -324,8 +370,7 @@ def run_export(config: Config, *, incremental: bool | None = None,
     }
 
     manifest_part.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    # Commit atomically: rename the ZIP, then the manifest last so a package that
-    # has manifest.json is known-complete.
-    zip_part.replace(pkg / "messages.zip")
+    # The ZIP parts are written directly; the manifest is written LAST (atomic
+    # rename), so a package that has manifest.json is known-complete.
     manifest_part.replace(pkg / "manifest.json")
     return summary

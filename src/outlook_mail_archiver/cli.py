@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from .config import ConfigError, load_config
-from .import_driver import parse_import_output, run_import
+from .import_driver import documented_command, parse_import_output
 from .reconcile import ImportCounts, load_manifest, reconcile
 
 
@@ -103,24 +103,25 @@ def cmd_export(args) -> int:
 def cmd_import(args) -> int:
     config = _load(args)
     pkg = Path(args.package)
-    zip_path = pkg / "messages.zip"
-    if not zip_path.exists():
-        print(f"no messages.zip in {pkg}", file=sys.stderr)
+    parts = sorted(pkg.glob("messages*.zip"))
+    if not parts:
+        print(f"no messages*.zip in {pkg}", file=sys.stderr)
         return 2
 
-    output, counts = run_import(config, zip_path)
-    if counts is None:
-        print("Mail-Archiver import is file-based. Place the ZIP in the importer's")
-        print("allowed directory and run:\n")
-        print(f"    {output}\n")
-        print("Then reconcile the result, e.g.:")
-        print(f"    outlook-mail-archiver reconcile {pkg} --import-output import.log")
-        return 0
-
-    print(output)
-    result = reconcile(load_manifest(pkg), counts)
-    _print_reconcile(result)
-    return 0 if result.counts_consistent else 1
+    print(f"Export package: {pkg}")
+    print(f"ZIP part(s) to import ({len(parts)}):")
+    for p in parts:
+        print(f"  {p.name}   ({p.stat().st_size / 1024 / 1024:.1f} MB)")
+    print()
+    print("Web upload: Mail-Archiver -> Mail Accounts -> Import -> Import EML,")
+    print("  target the IMPORT account, and upload EACH part above (order does not")
+    print("  matter; duplicates are skipped by Message-ID).")
+    if config.mail_archiver.import_command:
+        print("\nOr via the configured CLI import, per part, e.g.:")
+        for p in parts:
+            print(f"    {documented_command(config, p)}")
+    print(f"\nThen confirm:  outlook-mail-archiver verify {pkg}")
+    return 0
 
 
 def cmd_reconcile(args) -> int:

@@ -57,8 +57,11 @@ def _manifest(summary):
 
 
 def _zip_names(summary):
-    with zipfile.ZipFile(summary.package_dir / "messages.zip") as zf:
-        return zf.namelist()
+    names = []
+    for z in sorted(summary.package_dir.glob("messages*.zip")):
+        with zipfile.ZipFile(z) as zf:
+            names += zf.namelist()
+    return names
 
 
 def test_export_basic(tmp_path, fake_outlook):
@@ -163,6 +166,18 @@ def test_incremental_skips_already_archived(tmp_path, fake_outlook):
     statuses = {m["status"] for m in _manifest(summary)["messages"]}
     assert "skipped-already-archived" in statuses
     assert len(_zip_names(summary)) == 1
+
+
+def test_zip_rollover_splits_into_parts(tmp_path, fake_outlook):
+    # A tiny cap forces each message into its own ZIP part (for web-upload limits).
+    fake_outlook["Inbox"] = [make_message(internet_message_id=f"<{i}@x>")
+                             for i in range(3)]
+    summary = export_mod.run_export(_config(tmp_path, ["Inbox"]), max_zip_bytes=1)
+    parts = sorted(p.name for p in summary.package_dir.glob("messages*.zip"))
+    assert parts == ["messages-02.zip", "messages-03.zip", "messages.zip"]
+    man = _manifest(summary)
+    assert set(man["zip_parts"]) == set(parts)
+    assert len(_zip_names(summary)) == 3  # nothing lost across parts
 
 
 def test_folder_not_found_is_failure(tmp_path, fake_outlook):

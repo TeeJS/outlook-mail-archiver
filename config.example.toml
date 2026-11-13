@@ -37,6 +37,10 @@ incremental = false
 # sweep catches any back-dated or moved mail outside the window.
 overlap_days = 14
 
+# Max size per ZIP part. A large export rolls over to messages-02.zip, etc.,
+# so each part stays under a web-upload limit (Mail-Archiver default is 10 GB).
+max_zip_gb = 9
+
 [mail_archiver]
 # Base URL of your Mail-Archiver instance (used only by the import stage).
 base_url = ""

@@ -24,6 +24,7 @@ class ExportConfig:
     date_to: date | None = None
     incremental: bool = False
     overlap_days: int = 14
+    max_zip_gb: int = 9
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
             date_to=_parse_date(export.get("date_to", ""), "export.date_to"),
             incremental=bool(export.get("incremental", False)),
             overlap_days=int(export.get("overlap_days", 14) or 14),
+            max_zip_gb=int(export.get("max_zip_gb", 9) or 9),
         ),
         mail_archiver=MailArchiverConfig(
             base_url=(archiver.get("base_url") or "").strip(),
