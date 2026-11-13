@@ -1,0 +1,21 @@
+# Claude Code local session/config
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Local env / secrets
+.env
+*.local
+
+# Scratch / output
+scratch/
+*.eml
+*.mbox
+*.zip
