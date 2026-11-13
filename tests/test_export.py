@@ -115,6 +115,18 @@ def test_message_id_conflict_both_exported(tmp_path, fake_outlook):
     assert set(man["conflicts"][0]["entry_ids"]) == {"E_A", "E_B"}
 
 
+def test_degraded_mail_is_flagged(tmp_path, fake_outlook):
+    # A real mail item that lost a recipient is exported but flagged degraded,
+    # so it cannot later read as a clean success.
+    fake_outlook["A"] = [make_message(internet_message_id="<a@x>",
+                                      warnings=["recipient-2-unreadable: boom"])]
+    summary = export_mod.run_export(_config(tmp_path, ["A"]))
+    assert summary.exported == 1 and summary.degraded == 1
+    man = _manifest(summary)
+    assert man["totals"]["degraded"] == 1
+    assert man["messages"][0]["degraded"] is True
+
+
 def test_folder_not_found_is_failure(tmp_path, fake_outlook):
     summary = export_mod.run_export(_config(tmp_path, ["DoesNotExist"]))
     assert summary.failed == 1 and not summary.ok

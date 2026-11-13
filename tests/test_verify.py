@@ -85,6 +85,16 @@ def test_source_folder_error_blocks_verified_success():
     assert r.source_errors == 1 and not r.verified_success
 
 
+def test_degraded_mail_blocks_verified_success():
+    # A real mail item that lost content (degraded) must block clean acceptance
+    # even when its Message-ID is present in the right account.
+    man = _manifest([{"message_id": "<a@x>", "entry_id": "1"}],
+                    totals={"degraded": 1})
+    r = verify(man, _client({"<a@x>": [{"messageId": "<a@x>", "accountId": 1}]}))
+    assert r.source_degraded == 1 and r.present == 1
+    assert not r.verified_success
+
+
 def test_malformed_accountid_does_not_crash():
     man = _manifest([{"message_id": "<a@x>", "entry_id": "1"}])
     r = verify(man, _client({"<a@x>": [{"messageId": "<a@x>", "accountId": "oops"}]}))

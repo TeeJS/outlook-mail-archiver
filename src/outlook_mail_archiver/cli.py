@@ -69,10 +69,15 @@ def cmd_export(args) -> int:
     print(f"  skipped (duplicate):   {summary.skipped_duplicate}")
     print(f"  skipped (unsupported): {summary.skipped_unsupported}")
     print(f"  message-id conflicts:  {summary.conflicts}")
+    print(f"  degraded (incomplete): {summary.degraded}")
     print(f"  failed:                {summary.failed}")
     if summary.conflicts:
         print("  note: distinct messages share a Message-ID; both were exported,"
               " but the archive will keep one. See manifest 'conflicts'.")
+    if summary.degraded:
+        print("  note: some mail items lost content (dropped recipient, unresolved"
+              " sender, or inline fallback); they are exported but flagged "
+              "'degraded' and will not pass clean verification.")
     if summary.errors:
         print("  errors:")
         for e in summary.errors[:20]:
@@ -144,17 +149,22 @@ def cmd_verify(args) -> int:
     print(f"  query errors:         {len(result.errors)}")
     print(f"  source failed:        {result.source_failed}")
     print(f"  source folder errors: {result.source_errors}")
+    print(f"  degraded mail:        {result.source_degraded}")
     print(f"  non-mail skipped:     {result.skipped_unsupported}")
     for e in result.errors[:10]:
         print(f"    - {e}")
-    if result.source_failed or result.source_errors:
-        print("  note: the export itself was incomplete (failures/errors); "
-              "verification cannot report full success.")
+    if result.source_failed or result.source_errors or result.source_degraded:
+        print("  note: the export was incomplete (failures, folder errors, or "
+              "degraded mail); verification cannot report full success.")
     if result.skipped_unsupported:
         print("  note: non-mail items were skipped by design (see manifest); "
               "they are not part of the mail transfer.")
     if result.verified_success:
-        print("  => VERIFIED: every exported message is present in the archive.")
+        tail = (f" {result.skipped_unsupported} non-mail item(s) were excluded "
+                f"by design (not part of the mail transfer)."
+                if result.skipped_unsupported else "")
+        print("  => VERIFIED: every EXPORTED mail message is present in the "
+              f"archive.{tail}")
         return 0
     print("  => NOT verified. Do not treat the transfer as complete.", file=sys.stderr)
     return 1

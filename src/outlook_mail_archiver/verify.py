@@ -38,14 +38,16 @@ class VerifyResult:
     # Source-side incompleteness carried from the export manifest.
     source_failed: int = 0          # messages that failed to export (blocks)
     source_errors: int = 0          # folder-level errors (blocks)
+    source_degraded: int = 0        # mail items that lost content (blocks)
     skipped_unsupported: int = 0    # non-mail items (reported, not a failure)
 
     @property
     def verified_success(self) -> bool:
         # Every exported message confirmed in the archive AND the export itself
-        # was complete (no failures or folder errors). A source failure never
-        # disappears behind a verified subset. (Non-mail items were skipped by
-        # design and are reported, not counted as failures.)
+        # was complete: no failures, no folder errors, and no DEGRADED mail (a
+        # real message that lost a recipient/sender/inline image is incomplete
+        # and must never read as a clean success). Non-mail items were skipped by
+        # design and are reported, not counted as failures.
         return (
             self.checked > 0
             and self.present == self.checked
@@ -54,6 +56,7 @@ class VerifyResult:
             and self.unresolved_conflicts == 0
             and self.source_failed == 0
             and self.source_errors == 0
+            and self.source_degraded == 0
         )
 
     def as_dict(self) -> dict:
@@ -65,6 +68,7 @@ class VerifyResult:
             "errors": self.errors,
             "source_failed": self.source_failed,
             "source_errors": self.source_errors,
+            "source_degraded": self.source_degraded,
             "skipped_unsupported": self.skipped_unsupported,
             "verified_success": self.verified_success,
         }
@@ -147,6 +151,7 @@ def verify(manifest: dict, client: ArchiveClient) -> VerifyResult:
     result = VerifyResult()
     totals = manifest.get("totals", {}) or {}
     result.source_failed = _as_int(totals.get("failed", 0))
+    result.source_degraded = _as_int(totals.get("degraded", 0))
     result.skipped_unsupported = _as_int(totals.get("skipped_unsupported", 0))
     result.source_errors = len(manifest.get("errors", []) or [])
 

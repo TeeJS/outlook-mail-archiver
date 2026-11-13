@@ -41,6 +41,22 @@ from .paths import display_path, parse_config_path, zip_path
 MANIFEST_VERSION = 1
 _SUBJECT_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
+# Notes that mean a REAL mail item lost content (incomplete, not merely a
+# documented format limitation). These degrade a message: it is exported but
+# must never count as a clean, complete archival success. Declared limitations
+# (signed/encrypted S/MIME, non-mail items) are reported, not degraded.
+_DEGRADED_PREFIXES = (
+    "recipient-",                    # a specific recipient was unreadable
+    "recipients-enumeration-failed",  # the recipient list could not be read
+    "sender-smtp-unresolved",        # no usable sender address
+    "inline-fallback",               # an inline image could not be anchored
+    "inline-without-html",           # inline images with no HTML to attach to
+)
+
+
+def _is_degraded(notes: list[str]) -> bool:
+    return any(str(n).startswith(_DEGRADED_PREFIXES) for n in notes)
+
 
 @dataclass
 class ExportSummary:
@@ -50,6 +66,7 @@ class ExportSummary:
     skipped_duplicate: int = 0
     skipped_unsupported: int = 0
     conflicts: int = 0
+    degraded: int = 0
     failed: int = 0
     per_folder: dict = field(default_factory=dict)
     errors: list[dict] = field(default_factory=list)
@@ -191,6 +208,9 @@ def run_export(config: Config) -> ExportSummary:
 
                     summary.exported += 1
                     counts["exported"] += 1
+                    degraded = _is_degraded(notes)
+                    if degraded:
+                        summary.degraded += 1
                     dt = md.sent_on or md.received_time
                     messages.append({
                         "folder": disp,
@@ -206,6 +226,7 @@ def run_export(config: Config) -> ExportSummary:
                         "body_sha256": bhash,
                         "attachments": len(md.attachments),
                         "notes": notes,
+                        "degraded": degraded,
                         "status": "exported",
                     })
 
@@ -229,6 +250,7 @@ def run_export(config: Config) -> ExportSummary:
             "skipped_duplicate": summary.skipped_duplicate,
             "skipped_unsupported": summary.skipped_unsupported,
             "conflicts": summary.conflicts,
+            "degraded": summary.degraded,
             "failed": summary.failed,
         },
         "per_folder": summary.per_folder,
