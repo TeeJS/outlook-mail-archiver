@@ -57,7 +57,7 @@ Copy-Item config.example.toml config.toml
 Edit `config.toml` (it is git-ignored and never leaves your machine):
 
 - `export.staging_dir` — where packages are written (private mail; keep it local)
-- `export.folders` — explicit folder paths to export (nothing is omitted silently)
+- `export.folders` — explicit folder paths to export (nothing is omitted silently); use `["*"]` for the whole mailbox
 - `export.date_from` / `date_to` — optional inclusive date bounds
 - `mail_archiver.base_url`, `import_account_id`, `api_key` — for import/verify
 

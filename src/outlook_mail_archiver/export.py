@@ -35,7 +35,9 @@ from . import __version__
 from .config import Config
 from .eml_builder import build_eml
 from .identity import body_sha256
-from .outlook_com import extract_message, find_folder, iter_folder_items, outlook_session
+from .outlook_com import (
+    extract_message, find_folder, iter_folder_items, list_folders, outlook_session,
+)
 from .paths import display_path, parse_config_path, zip_path
 
 MANIFEST_VERSION = 1
@@ -81,11 +83,28 @@ def _safe_name(subject: str, msg_hash: str, seq: int) -> str:
     return f"{seq:05d}_{stub}_{msg_hash[:12]}.eml"
 
 
+def _resolve_targets(store, specs: list[str]) -> list[tuple[list[str], object, str]]:
+    """Resolve the folders to export to (segments, folder_com, display) tuples.
+
+    A spec of "*" means the whole store: the tree is walked ONCE (list_folders),
+    instead of resolving each folder name separately (which would re-walk the
+    tree per name). Otherwise each explicit spec is resolved by name.
+    """
+    if any((s or "").strip() == "*" for s in specs):
+        return [(segs, folder, display_path(segs)) for segs, folder in list_folders(store)]
+    targets = []
+    for spec in specs:
+        segs = parse_config_path(spec)
+        targets.append((segs, find_folder(store, spec), display_path(segs)))
+    return targets
+
+
 def run_export(config: Config) -> ExportSummary:
     if not config.export.folders:
         raise ValueError(
             "No folders selected for export. Set export.folders in config.toml "
-            "(use `outlook-mail-archiver folders` to list them)."
+            '(a list of folder paths, or ["*"] for the whole mailbox; use '
+            "`outlook-mail-archiver folders` to list them)."
         )
 
     staging = config.export.staging_dir
@@ -109,11 +128,9 @@ def run_export(config: Config) -> ExportSummary:
 
     with outlook_session(config.outlook_store) as (_ns, store):
         store_name = store.DisplayName
+        targets = _resolve_targets(store, config.export.folders)
         with ZipFile(zip_part, "w", ZIP_DEFLATED) as zf:
-            for spec in config.export.folders:
-                segments = parse_config_path(spec)
-                disp = display_path(segments)
-                folder = find_folder(store, spec)
+            for segments, folder, disp in targets:
                 if folder is None:
                     summary.failed += 1
                     summary.errors.append({"folder": disp, "reason": "folder-not-found"})

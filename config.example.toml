@@ -15,7 +15,9 @@ staging_dir = "D:/mail-archive-staging"
 # Folders to export. Give explicit paths; nothing is omitted silently.
 # Use the Outlook folder path as shown by `outlook-mail-archiver folders`.
 # A literal "/" inside a single folder name is written here as "\/".
+# Use ["*"] to export the WHOLE mailbox (every folder, one tree walk).
 folders = [
+    # "*",
     # "Inbox",
     # "Inbox/Projects/2026",
 ]

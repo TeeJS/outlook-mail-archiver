@@ -30,10 +30,16 @@ def fake_outlook(monkeypatch):
     def fake_extract(item):
         return item  # items are already MessageData
 
+    def fake_list_folders(store):
+        from outlook_mail_archiver.paths import parse_config_path
+        for spec in registry:
+            yield parse_config_path(spec), spec
+
     monkeypatch.setattr(export_mod, "outlook_session", fake_session)
     monkeypatch.setattr(export_mod, "find_folder", fake_find)
     monkeypatch.setattr(export_mod, "iter_folder_items", fake_iter)
     monkeypatch.setattr(export_mod, "extract_message", fake_extract)
+    monkeypatch.setattr(export_mod, "list_folders", fake_list_folders)
     return registry
 
 
@@ -125,6 +131,16 @@ def test_degraded_mail_is_flagged(tmp_path, fake_outlook):
     man = _manifest(summary)
     assert man["totals"]["degraded"] == 1
     assert man["messages"][0]["degraded"] is True
+
+
+def test_export_all_folders_star(tmp_path, fake_outlook):
+    # "*" exports every folder in the store (one tree walk), no explicit list.
+    fake_outlook["Inbox"] = [make_message(internet_message_id="<a@x>")]
+    fake_outlook["Archive"] = [make_message(internet_message_id="<b@x>")]
+    summary = export_mod.run_export(_config(tmp_path, ["*"]))
+    assert summary.exported == 2
+    dirs = {n.split("/")[0] for n in _zip_names(summary)}
+    assert dirs == {"Inbox", "Archive"}
 
 
 def test_folder_not_found_is_failure(tmp_path, fake_outlook):
