@@ -1,22 +1,23 @@
 """Per-message destination verification.
 
 Aggregate import counts can balance while hiding a wrong or mismatched message,
-so the real acceptance evidence is a per-Message-ID lookup against the
-Mail-Archiver REST API: for each exported message, confirm the archive holds a
-message whose ``messageId`` matches exactly AND that belongs to the target
-account.
+so the real acceptance evidence is confirming, per message, that the archive
+holds it. The Mail-Archiver REST API's search result does NOT carry the
+``Message-ID`` (only the message *detail* does), so we build the set of
+Message-IDs the archive holds for the target account — list the account's
+messages, read each one's detail for its ``messageId`` — and check every
+exported Message-ID against that set.
 
 Safeguards (per review):
-  * An exact ``messageId`` AND ``accountId`` match is required — not a text hit.
+  * Only Message-IDs whose detail reports the target ``accountId`` are counted,
+    so a cross-account or unattributed hit is never accepted.
   * A Message-ID conflict (two distinct source items share one Message-ID) can
-    never be fully verified by Message-ID alone: the archive dedups to one, so
-    at most one of the pair is confirmable. Such records are reported UNRESOLVED
-    and block success.
-  * Any HTTP/search/parse error is UNRESOLVED (never silently "present").
+    never be fully verified: the archive dedups to one, so such records are
+    reported UNRESOLVED and block success.
+  * Any HTTP/parse error while indexing is a global error → not verified.
 
-The HTTP layer is injected (``finder``), so the matching logic is unit-tested;
-the live endpoint shape must still be validated against a real instance before
-it is relied on (charter pre-transfer verification).
+The HTTP layer is injected (``ids_provider``) so the matching logic is
+unit-tested; the live index path is exercised against a real instance.
 """
 from __future__ import annotations
 
@@ -28,6 +29,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 
+def _norm(message_id: str) -> str:
+    """Normalise a Message-ID for comparison: trim and drop angle brackets.
+
+    The archive stores the id without ``<>``; the manifest keeps them.
+    """
+    return (message_id or "").strip().lstrip("<").rstrip(">").strip()
+
+
 @dataclass
 class VerifyResult:
     checked: int = 0
@@ -35,19 +44,13 @@ class VerifyResult:
     missing: list[str] = field(default_factory=list)
     unresolved_conflicts: int = 0
     errors: list[dict] = field(default_factory=list)
-    # Source-side incompleteness carried from the export manifest.
-    source_failed: int = 0          # messages that failed to export (blocks)
-    source_errors: int = 0          # folder-level errors (blocks)
-    source_degraded: int = 0        # mail items that lost content (blocks)
-    skipped_unsupported: int = 0    # non-mail items (reported, not a failure)
+    source_failed: int = 0
+    source_errors: int = 0
+    source_degraded: int = 0
+    skipped_unsupported: int = 0
 
     @property
     def verified_success(self) -> bool:
-        # Every exported message confirmed in the archive AND the export itself
-        # was complete: no failures, no folder errors, and no DEGRADED mail (a
-        # real message that lost a recipient/sender/inline image is incomplete
-        # and must never read as a clean success). Non-mail items were skipped by
-        # design and are reported, not counted as failures.
         return (
             self.checked > 0
             and self.present == self.checked
@@ -79,65 +82,70 @@ class ArchiveError(Exception):
 
 
 class ArchiveClient:
-    """Thin REST client. ``find`` returns candidate records for a Message-ID.
+    """Reads the set of Message-IDs the archive holds for one account.
 
-    Each candidate is a dict with at least ``messageId`` and ``accountId``.
-    Pass a custom ``finder`` (message_id -> list[dict]) to test without HTTP.
+    Pass ``ids_provider`` (a callable returning a set of normalised Message-IDs)
+    to test without HTTP.
     """
 
-    def __init__(self, base_url: str, api_key: str, account_id: int, *, finder=None,
-                 timeout: float = 30.0):
+    def __init__(self, base_url: str, api_key: str, account_id: int, *,
+                 ids_provider=None, timeout: float = 30.0, page_size: int = 100):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.account_id = account_id
         self.timeout = timeout
-        self._finder = finder
+        self.page_size = page_size
+        self._ids_provider = ids_provider
 
-    def find(self, message_id: str) -> list[dict]:
-        if self._finder is not None:
-            return self._finder(message_id)
-        return self._http_find(message_id)
+    def account_message_ids(self) -> set[str]:
+        if self._ids_provider is not None:
+            return self._ids_provider()
+        return self._http_index()
 
-    def _http_find(self, message_id: str) -> list[dict]:  # pragma: no cover - live only
-        bare = message_id.strip().lstrip("<").rstrip(">")
-        query = urllib.parse.urlencode({
-            "q": bare, "accountId": self.account_id, "pageSize": 50,
-        })
-        url = f"{self.base_url}/api/v1/emails?{query}"
-        req = urllib.request.Request(url, headers={
+    def _get(self, path: str):  # pragma: no cover - live only
+        req = urllib.request.Request(self.base_url + path, headers={
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
         })
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+                return json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, json.JSONDecodeError, ValueError) as exc:
-            raise ArchiveError(f"archive query failed: {exc}") from exc
-        if isinstance(payload, list):
-            items = payload
-        elif isinstance(payload, dict):
-            items = payload.get("items", [])
-        else:
-            raise ArchiveError(f"unexpected archive response shape: {type(payload).__name__}")
-        return items if isinstance(items, list) else []
+            raise ArchiveError(f"archive request failed ({path}): {exc}") from exc
 
-
-def _matches(candidate: dict, message_id: str, account_id: int) -> bool:
-    if not isinstance(candidate, dict):
-        return False
-    cid = str(candidate.get("messageId", "")).strip()
-    want = message_id.strip()
-    if cid != want and cid != want.strip("<>"):
-        return False
-    # Require EXPLICIT matching account evidence. A candidate with no accountId
-    # is unattributed and must not be accepted as "present in the right account".
-    acct = candidate.get("accountId")
-    if acct is None:
-        return False
-    try:
-        return int(acct) == int(account_id)
-    except (TypeError, ValueError):
-        return False
+    def _http_index(self) -> set[str]:  # pragma: no cover - live only
+        ids: set[str] = set()
+        page = 1
+        while True:
+            q = urllib.parse.urlencode({
+                "accountId": self.account_id, "pageSize": self.page_size, "page": page,
+            })
+            data = self._get(f"/api/v1/emails?{q}")
+            if isinstance(data, list):
+                items, total_pages = data, 1
+            elif isinstance(data, dict):
+                items = data.get("items", []) or []
+                total_pages = int(data.get("totalPages", 1) or 1)
+            else:
+                raise ArchiveError(f"unexpected list response: {type(data).__name__}")
+            for it in items:
+                eid = it.get("id") if isinstance(it, dict) else None
+                if eid is None:
+                    continue
+                detail = self._get(f"/api/v1/emails/{eid}")
+                if not isinstance(detail, dict):
+                    continue
+                try:
+                    same_account = int(detail.get("accountId")) == int(self.account_id)
+                except (TypeError, ValueError):
+                    same_account = False
+                mid = _norm(str(detail.get("messageId", "")))
+                if same_account and mid:
+                    ids.add(mid)
+            if page >= total_pages:
+                break
+            page += 1
+        return ids
 
 
 def _as_int(value, default: int = 0) -> int:
@@ -160,23 +168,24 @@ def verify(manifest: dict, client: ArchiveClient) -> VerifyResult:
         if m.get("status") == "exported":
             groups[m["message_id"]].append(m)
 
+    try:
+        present_ids = client.account_message_ids()
+    except ArchiveError as exc:
+        # Could not index the archive — nothing can be confirmed.
+        result.checked = sum(len(v) for v in groups.values())
+        result.errors.append({"error": str(exc)})
+        return result
+
     for message_id, records in groups.items():
         result.checked += len(records)
-        try:
-            candidates = client.find(message_id)
-        except ArchiveError as exc:
-            result.errors.append({"message_id": message_id, "error": str(exc)})
-            continue
-
-        found = any(_matches(c, message_id, client.account_id) for c in candidates)
+        found = _norm(message_id) in present_ids
         if len(records) == 1:
             if found:
                 result.present += 1
             else:
                 result.missing.append(message_id)
         else:
-            # Conflict: the archive holds at most one for this Message-ID, so the
-            # others cannot be confirmed by Message-ID alone.
+            # Conflict: the archive holds at most one for this Message-ID.
             if found:
                 result.present += 1
                 result.unresolved_conflicts += len(records) - 1
