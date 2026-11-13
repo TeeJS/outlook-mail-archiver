@@ -87,6 +87,10 @@ def cmd_export(args) -> int:
     if not summary.ok:
         print("Export completed WITH failures (see manifest.json).", file=sys.stderr)
         return 1
+    if summary.degraded:
+        print(f"Export completed, but {summary.degraded} mail item(s) are "
+              "incomplete (degraded) and will not pass clean verification.")
+        return 0
     print("Export completed cleanly.")
     return 0
 
