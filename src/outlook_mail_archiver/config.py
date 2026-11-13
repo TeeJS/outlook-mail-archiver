@@ -22,6 +22,8 @@ class ExportConfig:
     folders: list[str] = field(default_factory=list)
     date_from: date | None = None
     date_to: date | None = None
+    incremental: bool = False
+    overlap_days: int = 14
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ def load_config(path: str | Path = "config.toml") -> Config:
             folders=folders,
             date_from=_parse_date(export.get("date_from", ""), "export.date_from"),
             date_to=_parse_date(export.get("date_to", ""), "export.date_to"),
+            incremental=bool(export.get("incremental", False)),
+            overlap_days=int(export.get("overlap_days", 14) or 14),
         ),
         mail_archiver=MailArchiverConfig(
             base_url=(archiver.get("base_url") or "").strip(),

@@ -27,6 +27,16 @@ folders = [
 date_from = ""
 date_to = ""
 
+# Incremental sync: when true, the export skips any message already in the
+# archive (confirmed via the REST API) so repeat runs only pick up NEW mail.
+# The first run (empty archive) still exports everything and seeds the state.
+# Requires mail_archiver.base_url + api_key + import_account_id below.
+incremental = false
+# Days of overlap below the verified high-water mark that each incremental run
+# re-examines, so nothing is missed at the boundary. A periodic `export --full`
+# sweep catches any back-dated or moved mail outside the window.
+overlap_days = 14
+
 [mail_archiver]
 # Base URL of your Mail-Archiver instance (used only by the import stage).
 base_url = ""

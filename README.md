@@ -89,6 +89,22 @@ python -m outlook_mail_archiver.cli verify <package>
 `pilot` runs an export and prints the import command for the newest package —
 use it for the small representative first run before a full transfer.
 
+### Incremental sync (ongoing)
+
+Set `export.incremental = true` (and `folders = ["*"]` for the whole mailbox).
+Each run then queries the archive and **skips every message it already holds**,
+so only new mail is exported — the first run on an empty archive still captures
+everything and seeds the state. A verified `verify` advances a per-account
+high-water mark, and later runs only scan mail newer than it (minus
+`overlap_days`). Flags: `export --incremental` forces it on; `export --full`
+does a full sweep that ignores the date window (run it periodically, e.g.
+weekly, to catch back-dated or moved mail). Wire a daily run to a Windows
+scheduled task — classic Outlook must be running in that session.
+
+```
+export --incremental   ->   import   ->   verify   (advances the watermark)
+```
+
 ### Mail-Archiver import setup (one-time, on the server)
 
 The CLI import reads from a whitelisted directory. In the Mail-Archiver

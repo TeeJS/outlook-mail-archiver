@@ -55,7 +55,11 @@ def cmd_export(args) -> int:
 
     config = _load(args)
     try:
-        summary = run_export(config)
+        summary = run_export(
+            config,
+            incremental=(True if getattr(args, "incremental", False) else None),
+            full_sweep=getattr(args, "full", False),
+        )
     except OutlookError as exc:
         print(f"outlook error: {exc}", file=sys.stderr)
         return 2
@@ -66,6 +70,7 @@ def cmd_export(args) -> int:
     print(f"Export package: {summary.package_dir}")
     print(f"  processed:             {summary.processed}")
     print(f"  exported:              {summary.exported}")
+    print(f"  skipped (in archive):  {summary.skipped_already_archived}")
     print(f"  skipped (duplicate):   {summary.skipped_duplicate}")
     print(f"  skipped (unsupported): {summary.skipped_unsupported}")
     print(f"  message-id conflicts:  {summary.conflicts}")
@@ -169,9 +174,30 @@ def cmd_verify(args) -> int:
                 if result.skipped_unsupported else "")
         print("  => VERIFIED: every EXPORTED mail message is present in the "
               f"archive.{tail}")
+        _advance_watermark(config, manifest)
         return 0
     print("  => NOT verified. Do not treat the transfer as complete.", file=sys.stderr)
     return 1
+
+
+def _advance_watermark(config, manifest) -> None:
+    """On a verified import, move the incremental high-water mark to the newest
+    exported message date (it is now confirmed present in the archive)."""
+    from datetime import datetime
+    from .state import advance_high_water_mark
+
+    dates = []
+    for m in manifest.get("messages", []):
+        if m.get("status") == "exported" and m.get("date"):
+            try:
+                dates.append(datetime.fromisoformat(m["date"]))
+            except ValueError:
+                pass
+    newest = max(dates, default=None)
+    if newest is not None and config.mail_archiver.import_account_id:
+        advance_high_water_mark(config.export.staging_dir,
+                                config.mail_archiver.import_account_id, newest)
+        print(f"  watermark advanced to {newest.isoformat()}")
 
 
 def cmd_pilot(args) -> int:
@@ -219,8 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("folders", parents=[common],
                    help="list the Outlook folder tree").set_defaults(func=cmd_folders)
-    sub.add_parser("export", parents=[common],
-                   help="run the export stage").set_defaults(func=cmd_export)
+    pe = sub.add_parser("export", parents=[common], help="run the export stage")
+    pe.add_argument("--incremental", action="store_true",
+                    help="skip messages already in the archive (incremental sync)")
+    pe.add_argument("--full", action="store_true",
+                    help="full sweep: ignore the incremental date window")
+    pe.set_defaults(func=cmd_export)
 
     pi = sub.add_parser("import", parents=[common],
                         help="show or run the import for a package")

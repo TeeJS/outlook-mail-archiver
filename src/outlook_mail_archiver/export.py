@@ -39,6 +39,7 @@ from .outlook_com import (
     extract_message, find_folder, iter_folder_items, list_folders, outlook_session,
 )
 from .paths import display_path, parse_config_path, zip_path
+from .verify import _norm
 
 MANIFEST_VERSION = 1
 _SUBJECT_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -67,6 +68,7 @@ class ExportSummary:
     exported: int = 0
     skipped_duplicate: int = 0
     skipped_unsupported: int = 0
+    skipped_already_archived: int = 0
     conflicts: int = 0
     degraded: int = 0
     failed: int = 0
@@ -99,7 +101,8 @@ def _resolve_targets(store, specs: list[str]) -> list[tuple[list[str], object, s
     return targets
 
 
-def run_export(config: Config) -> ExportSummary:
+def run_export(config: Config, *, incremental: bool | None = None,
+               full_sweep: bool = False, archive_client=None) -> ExportSummary:
     if not config.export.folders:
         raise ValueError(
             "No folders selected for export. Set export.folders in config.toml "
@@ -109,6 +112,32 @@ def run_export(config: Config) -> ExportSummary:
 
     staging = config.export.staging_dir
     staging.mkdir(parents=True, exist_ok=True)
+
+    # Incremental mode: skip messages already in the archive, narrowed to a date
+    # window from the verified high-water mark. First run (no watermark) or a
+    # --full sweep scans everything; the archive's dedup makes that harmless.
+    incremental = config.export.incremental if incremental is None else incremental
+    archived_ids: set[str] = set()
+    window_from = None
+    eff_date_from = config.export.date_from
+    if incremental:
+        from datetime import timedelta
+        from .state import load_state
+        from .verify import ArchiveClient
+
+        ma = config.mail_archiver
+        if not ma.base_url or not ma.api_key or not ma.import_account_id:
+            raise ValueError(
+                "Incremental export needs mail_archiver.base_url, api_key and "
+                "import_account_id in config.toml."
+            )
+        hwm = load_state(staging, ma.import_account_id).high_water_mark
+        if hwm is not None and not full_sweep:
+            window_from = (hwm - timedelta(days=config.export.overlap_days)).date()
+            eff_date_from = window_from if eff_date_from is None else max(eff_date_from, window_from)
+        if archive_client is None:
+            archive_client = ArchiveClient(ma.base_url, ma.api_key, ma.import_account_id)
+        archived_ids = {_norm(x) for x in archive_client.account_message_ids(from_date=window_from)}
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     pkg = staging / f"export-{stamp}"
@@ -142,7 +171,7 @@ def run_export(config: Config) -> ExportSummary:
                 seq = 0
 
                 for item in iter_folder_items(
-                    folder, config.export.date_from, config.export.date_to
+                    folder, eff_date_from, config.export.date_to
                 ):
                     summary.processed += 1
                     seq += 1
@@ -184,6 +213,18 @@ def run_export(config: Config) -> ExportSummary:
                         continue
 
                     mid = info["message_id"]
+
+                    # Incremental: the archive already holds this message -> skip.
+                    if incremental and _norm(mid) in archived_ids:
+                        summary.skipped_already_archived += 1
+                        counts["skipped"] += 1
+                        messages.append({
+                            "folder": disp, "message_id": mid,
+                            "status": "skipped-already-archived",
+                            "subject": md.subject,
+                        })
+                        continue
+
                     bhash = body_sha256(md)
 
                     # True duplicate = the same physical item (same EntryID)
@@ -266,9 +307,15 @@ def run_export(config: Config) -> ExportSummary:
             "exported": summary.exported,
             "skipped_duplicate": summary.skipped_duplicate,
             "skipped_unsupported": summary.skipped_unsupported,
+            "skipped_already_archived": summary.skipped_already_archived,
             "conflicts": summary.conflicts,
             "degraded": summary.degraded,
             "failed": summary.failed,
+        },
+        "incremental": {
+            "enabled": bool(incremental),
+            "full_sweep": bool(full_sweep),
+            "window_from": window_from.isoformat() if window_from else None,
         },
         "per_folder": summary.per_folder,
         "conflicts": conflicts_list,

@@ -143,6 +143,28 @@ def test_export_all_folders_star(tmp_path, fake_outlook):
     assert dirs == {"Inbox", "Archive"}
 
 
+def test_incremental_skips_already_archived(tmp_path, fake_outlook):
+    from outlook_mail_archiver.verify import ArchiveClient
+    fake_outlook["Inbox"] = [
+        make_message(internet_message_id="<a@x>"),   # already archived
+        make_message(internet_message_id="<b@x>"),   # new
+    ]
+    cfg = Config(
+        outlook_store="",
+        export=ExportConfig(staging_dir=tmp_path, folders=["Inbox"], incremental=True),
+        mail_archiver=MailArchiverConfig(base_url="http://x", api_key="k",
+                                         import_account_id=3),
+        source_path=tmp_path / "config.toml",
+    )
+    client = ArchiveClient("http://x", "k", 3, ids_provider=lambda: {"a@x"})
+    summary = export_mod.run_export(cfg, archive_client=client)
+    assert summary.exported == 1
+    assert summary.skipped_already_archived == 1
+    statuses = {m["status"] for m in _manifest(summary)["messages"]}
+    assert "skipped-already-archived" in statuses
+    assert len(_zip_names(summary)) == 1
+
+
 def test_folder_not_found_is_failure(tmp_path, fake_outlook):
     summary = export_mod.run_export(_config(tmp_path, ["DoesNotExist"]))
     assert summary.failed == 1 and not summary.ok

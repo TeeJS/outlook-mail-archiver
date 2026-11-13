@@ -97,10 +97,15 @@ class ArchiveClient:
         self.page_size = page_size
         self._ids_provider = ids_provider
 
-    def account_message_ids(self) -> set[str]:
+    def account_message_ids(self, from_date=None) -> set[str]:
+        """Return the normalised Message-IDs the archive holds for the account.
+
+        ``from_date`` (a date) limits the query to messages on/after that date,
+        so an incremental run only indexes the recent window.
+        """
         if self._ids_provider is not None:
             return self._ids_provider()
-        return self._http_index()
+        return self._http_index(from_date)
 
     def _get(self, path: str):  # pragma: no cover - live only
         req = urllib.request.Request(self.base_url + path, headers={
@@ -113,13 +118,16 @@ class ArchiveClient:
         except (urllib.error.URLError, json.JSONDecodeError, ValueError) as exc:
             raise ArchiveError(f"archive request failed ({path}): {exc}") from exc
 
-    def _http_index(self) -> set[str]:  # pragma: no cover - live only
+    def _http_index(self, from_date=None) -> set[str]:  # pragma: no cover - live only
         ids: set[str] = set()
         page = 1
         while True:
-            q = urllib.parse.urlencode({
+            params = {
                 "accountId": self.account_id, "pageSize": self.page_size, "page": page,
-            })
+            }
+            if from_date is not None:
+                params["from"] = from_date.isoformat()
+            q = urllib.parse.urlencode(params)
             data = self._get(f"/api/v1/emails?{q}")
             if isinstance(data, list):
                 items, total_pages = data, 1
