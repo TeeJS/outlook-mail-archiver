@@ -1,8 +1,12 @@
 from outlook_mail_archiver.verify import ArchiveClient, ArchiveError, verify
 
 
-def _manifest(records):
-    return {"messages": [dict(status="exported", **r) for r in records]}
+def _manifest(records, totals=None, errors=None):
+    return {
+        "messages": [dict(status="exported", **r) for r in records],
+        "totals": totals or {},
+        "errors": errors or [],
+    }
 
 
 def _client(responses, account_id=1):
@@ -52,3 +56,36 @@ def test_http_error_is_unresolved():
     man = _manifest([{"message_id": "<a@x>", "entry_id": "1"}])
     r = verify(man, _client({"<a@x>": ArchiveError("boom")}))
     assert r.errors and not r.verified_success
+
+
+def test_candidate_without_accountid_is_not_a_match():
+    # Regression: an unattributed candidate (no accountId) must NOT be accepted.
+    man = _manifest([{"message_id": "<a@x>", "entry_id": "1"}])
+    r = verify(man, _client({"<a@x>": [{"messageId": "<a@x>"}]}))
+    assert r.missing == ["<a@x>"] and not r.verified_success
+
+
+def test_source_failure_blocks_verified_success():
+    # Regression: a source export failure must not vanish behind a verified subset.
+    man = _manifest(
+        [{"message_id": "<a@x>", "entry_id": "1"}],
+        totals={"failed": 1},
+    )
+    r = verify(man, _client({"<a@x>": [{"messageId": "<a@x>", "accountId": 1}]}))
+    assert r.present == 1 and r.source_failed == 1
+    assert not r.verified_success
+
+
+def test_source_folder_error_blocks_verified_success():
+    man = _manifest(
+        [{"message_id": "<a@x>", "entry_id": "1"}],
+        errors=[{"folder": "X", "reason": "folder-not-found"}],
+    )
+    r = verify(man, _client({"<a@x>": [{"messageId": "<a@x>", "accountId": 1}]}))
+    assert r.source_errors == 1 and not r.verified_success
+
+
+def test_malformed_accountid_does_not_crash():
+    man = _manifest([{"message_id": "<a@x>", "entry_id": "1"}])
+    r = verify(man, _client({"<a@x>": [{"messageId": "<a@x>", "accountId": "oops"}]}))
+    assert not r.verified_success and r.missing == ["<a@x>"]

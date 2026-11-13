@@ -76,9 +76,13 @@ def map_segment(name: str) -> str:
     itself; a name that had to be sanitised gets a short suffix derived from the
     RAW name, so two distinct raw names that sanitise to the same base (e.g.
     'A/B' and 'A_B') never collide and always map the same way across runs.
+
+    The '~' suffix is a reserved marker: any raw name that itself contains '~'
+    also gets a hash suffix, so a literal folder named exactly like a generated
+    result (e.g. 'A_B~a1b2c3') can never collide with the suffix of another.
     """
     safe = sanitize_segment(name)
-    if safe == name:
+    if safe == name and "~" not in name:
         return safe
     tag = hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
     return f"{safe}~{tag}"

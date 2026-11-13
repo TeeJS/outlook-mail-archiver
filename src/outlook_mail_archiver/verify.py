@@ -35,15 +35,25 @@ class VerifyResult:
     missing: list[str] = field(default_factory=list)
     unresolved_conflicts: int = 0
     errors: list[dict] = field(default_factory=list)
+    # Source-side incompleteness carried from the export manifest.
+    source_failed: int = 0          # messages that failed to export (blocks)
+    source_errors: int = 0          # folder-level errors (blocks)
+    skipped_unsupported: int = 0    # non-mail items (reported, not a failure)
 
     @property
     def verified_success(self) -> bool:
+        # Every exported message confirmed in the archive AND the export itself
+        # was complete (no failures or folder errors). A source failure never
+        # disappears behind a verified subset. (Non-mail items were skipped by
+        # design and are reported, not counted as failures.)
         return (
             self.checked > 0
             and self.present == self.checked
             and not self.missing
             and not self.errors
             and self.unresolved_conflicts == 0
+            and self.source_failed == 0
+            and self.source_errors == 0
         )
 
     def as_dict(self) -> dict:
@@ -53,6 +63,9 @@ class VerifyResult:
             "missing": self.missing,
             "unresolved_conflicts": self.unresolved_conflicts,
             "errors": self.errors,
+            "source_failed": self.source_failed,
+            "source_errors": self.source_errors,
+            "skipped_unsupported": self.skipped_unsupported,
             "verified_success": self.verified_success,
         }
 
@@ -96,21 +109,47 @@ class ArchiveClient:
                 payload = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, json.JSONDecodeError, ValueError) as exc:
             raise ArchiveError(f"archive query failed: {exc}") from exc
-        items = payload.get("items", payload if isinstance(payload, list) else [])
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            items = payload.get("items", [])
+        else:
+            raise ArchiveError(f"unexpected archive response shape: {type(payload).__name__}")
         return items if isinstance(items, list) else []
 
 
 def _matches(candidate: dict, message_id: str, account_id: int) -> bool:
+    if not isinstance(candidate, dict):
+        return False
     cid = str(candidate.get("messageId", "")).strip()
     want = message_id.strip()
     if cid != want and cid != want.strip("<>"):
         return False
+    # Require EXPLICIT matching account evidence. A candidate with no accountId
+    # is unattributed and must not be accepted as "present in the right account".
     acct = candidate.get("accountId")
-    return acct is None or int(acct) == int(account_id)
+    if acct is None:
+        return False
+    try:
+        return int(acct) == int(account_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def _as_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def verify(manifest: dict, client: ArchiveClient) -> VerifyResult:
     result = VerifyResult()
+    totals = manifest.get("totals", {}) or {}
+    result.source_failed = _as_int(totals.get("failed", 0))
+    result.skipped_unsupported = _as_int(totals.get("skipped_unsupported", 0))
+    result.source_errors = len(manifest.get("errors", []) or [])
+
     groups: dict[str, list[dict]] = defaultdict(list)
     for m in manifest.get("messages", []):
         if m.get("status") == "exported":

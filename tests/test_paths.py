@@ -35,6 +35,15 @@ def test_zip_path_distinct_and_deterministic():
     assert b == "A_B"                  # clean name is unchanged
 
 
+def test_tilde_marker_is_reserved():
+    # A literal name containing '~' gets its own suffix, so it can never equal
+    # another name's generated '~<hash>' suffix.
+    mapped = zip_path(["A_B~a1b2c3"])
+    assert mapped != "A_B~a1b2c3"
+    assert mapped.startswith("A_B~a1b2c3~")
+    assert zip_path(["A/B"]) != mapped
+
+
 def test_sanitize_trailing_dot_and_reserved():
     assert sanitize_segment("report.") == "report"
     assert sanitize_segment("COM1").upper() == "COM1_"

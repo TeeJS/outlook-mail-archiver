@@ -141,9 +141,18 @@ def cmd_verify(args) -> int:
     print(f"  present:              {result.present}")
     print(f"  missing:              {len(result.missing)}")
     print(f"  unresolved conflicts: {result.unresolved_conflicts}")
-    print(f"  errors:               {len(result.errors)}")
+    print(f"  query errors:         {len(result.errors)}")
+    print(f"  source failed:        {result.source_failed}")
+    print(f"  source folder errors: {result.source_errors}")
+    print(f"  non-mail skipped:     {result.skipped_unsupported}")
     for e in result.errors[:10]:
         print(f"    - {e}")
+    if result.source_failed or result.source_errors:
+        print("  note: the export itself was incomplete (failures/errors); "
+              "verification cannot report full success.")
+    if result.skipped_unsupported:
+        print("  note: non-mail items were skipped by design (see manifest); "
+              "they are not part of the mail transfer.")
     if result.verified_success:
         print("  => VERIFIED: every exported message is present in the archive.")
         return 0
