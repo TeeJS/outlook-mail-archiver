@@ -1,6 +1,20 @@
 # Claude Code local session/config
 .claude/
 
+# Local charter (contains infrastructure details — keep out of the public repo)
+PROJECT.md
+CHARTER.md
+
+# Local runtime config (contains Mail-Archiver URL / account / credentials)
+config.toml
+*.local.toml
+
+# Export staging — private work mail, never commit
+staging/
+exports/
+*.eml
+*.mbox
+
 # Python
 __pycache__/
 *.py[cod]
@@ -9,13 +23,8 @@ venv/
 *.egg-info/
 build/
 dist/
+.pytest_cache/
 
-# Local env / secrets
+# Env / secrets
 .env
 *.local
-
-# Scratch / output
-scratch/
-*.eml
-*.mbox
-*.zip

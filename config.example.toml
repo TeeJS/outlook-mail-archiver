@@ -1,0 +1,39 @@
+# outlook-mail-archiver configuration — copy to config.toml and edit.
+# config.toml is git-ignored; it holds your real instance details and must never
+# be committed. Nothing here is written into export packages, manifests, or logs.
+
+[outlook]
+# Display name of the Outlook store to read. Leave empty for the default store.
+store = ""
+
+[export]
+# Where export packages (ZIP + manifest) are written. Private work mail lives
+# here; keep it off any public/shared location. Retained for retry until the
+# destination import is verified.
+staging_dir = "D:/mail-archive-staging"
+
+# Folders to export. Give explicit paths; nothing is omitted silently.
+# Use the Outlook folder path as shown by `outlook-mail-archiver folders`.
+# A literal "/" inside a single folder name is written here as "\/".
+folders = [
+    # "Inbox",
+    # "Inbox/Projects/2026",
+]
+
+# Optional inclusive date range on received time (local), ISO yyyy-mm-dd.
+# Leave empty for no bound.
+date_from = ""
+date_to = ""
+
+[mail_archiver]
+# Base URL of your Mail-Archiver instance (used only by the import stage).
+base_url = ""
+# Database ID of the destination IMPORT-type account.
+import_account_id = 0
+# Scoped REST API key (read-only) for per-message verification (`verify`).
+# Created in the Mail-Archiver UI under API Keys. Stays here, never in exports.
+api_key = ""
+# Path to the Mail-Archiver CLI import, if driving import over SSH/docker exec
+# is configured locally. Left empty, the import stage only prints the documented
+# command for you to run. Credentials, if any, stay here and never leave config.
+# import_command = ""
