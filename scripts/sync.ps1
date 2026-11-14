@@ -38,10 +38,20 @@ function Log([string]$msg) {
 
 function Invoke-Cli([string[]]$cliArgs) {
     Push-Location $RepoDir
+    # A non-zero CLI exit must NOT throw here. verify intentionally exits non-zero
+    # when mail is ambiguous/degraded but still present, and PowerShell 7.4+ turns a
+    # non-zero native exit into a TERMINATING error while $ErrorActionPreference is
+    # 'Stop' ($PSNativeCommandUseErrorActionPreference). Relax it for the call so
+    # verify can't abort the run; callers gate on the returned exit code instead.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         & $Python -m outlook_mail_archiver.cli @cliArgs 2>&1 | ForEach-Object { Log "  | $_" }
         return $LASTEXITCODE
-    } finally { Pop-Location }
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        Pop-Location
+    }
 }
 
 try {
