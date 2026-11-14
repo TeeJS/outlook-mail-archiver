@@ -3,7 +3,9 @@ import urllib.error
 
 import pytest
 
-from outlook_mail_archiver.verify import ArchiveClient, ArchiveError, verify
+from outlook_mail_archiver.verify import (
+    ArchiveClient, ArchiveError, ArchiveIndex, verify,
+)
 
 
 def _manifest(records, totals=None, errors=None):
@@ -22,6 +24,15 @@ def _client(present_ids, account_id=1):
             raise present_ids
         return set(present_ids)
     return ArchiveClient("http://x", "key", account_id, ids_provider=provider)
+
+
+def _client_index(present_ids, subject_counts, account_id=1):
+    # Inject a full ArchiveIndex (Message-IDs + subject multiset) for the
+    # subject-fallback path.
+    def provider():
+        return ArchiveIndex(message_ids=set(present_ids),
+                            subject_counts=dict(subject_counts))
+    return ArchiveClient("http://x", "key", account_id, index_provider=provider)
 
 
 def test_all_present_is_verified():
@@ -72,6 +83,67 @@ def test_degraded_mail_blocks_verified_success():
     man = _manifest([{"message_id": "<a@x>", "entry_id": "1"}], totals={"degraded": 1})
     r = verify(man, _client({"a@x"}))
     assert r.source_degraded == 1 and not r.verified_success
+
+
+# --- subject fallback (Message-ID re-derived by the archive) -----------------
+
+def test_subject_fallback_confirms_rederived_message_id():
+    # Archive holds the message but under a different Message-ID; exact match
+    # fails, subject match (one copy available) confirms it.
+    man = _manifest([{"message_id": "<x@geopod>", "entry_id": "1",
+                      "subject": "UPS Power Restored 12:52"}])
+    r = verify(man, _client_index(set(), {"ups power restored 12:52": 1}))
+    assert r.present == 0 and r.present_fallback == 1 and r.confirmed == 1
+    assert not r.missing and not r.ambiguous and r.verified_success
+
+
+def test_subject_fallback_normalises_whitespace_and_case():
+    man = _manifest([{"message_id": "<x@geopod>", "entry_id": "1",
+                      "subject": "  Hello   WORLD "}])
+    r = verify(man, _client_index(set(), {"hello world": 1}))
+    assert r.present_fallback == 1 and r.verified_success
+
+
+def test_subject_absent_is_missing_not_fallback():
+    man = _manifest([{"message_id": "<x@geopod>", "entry_id": "1",
+                      "subject": "Only In Export"}])
+    r = verify(man, _client_index(set(), {"something else": 2}))
+    assert r.present_fallback == 0 and r.missing == ["<x@geopod>"]
+    assert not r.verified_success
+
+
+def test_subject_slot_exhausted_is_ambiguous():
+    # Two exported messages share a subject, but the archive holds only one copy
+    # of it and neither matches by Message-ID: one is covered, one is ambiguous.
+    man = _manifest([{"message_id": "<a@geopod>", "entry_id": "1", "subject": "Dup"},
+                     {"message_id": "<b@geopod>", "entry_id": "2", "subject": "Dup"}])
+    r = verify(man, _client_index(set(), {"dup": 1}))
+    assert r.present_fallback == 1 and len(r.ambiguous) == 1
+    assert not r.verified_success
+
+
+def test_exact_match_reserves_subject_slot_before_fallback():
+    # One message matches by Message-ID (consuming the single archive copy of
+    # 'Shared'); a second with the same subject must NOT be confirmed by fallback.
+    man = _manifest([{"message_id": "<real@host>", "entry_id": "1", "subject": "Shared"},
+                     {"message_id": "<x@geopod>", "entry_id": "2", "subject": "Shared"}])
+    r = verify(man, _client_index({"real@host"}, {"shared": 1}))
+    assert r.present == 1 and r.present_fallback == 0
+    assert len(r.ambiguous) == 1 and not r.verified_success
+
+
+def test_fallback_can_be_disabled():
+    man = _manifest([{"message_id": "<x@geopod>", "entry_id": "1", "subject": "S"}])
+    r = verify(man, _client_index(set(), {"s": 1}), fallback_subject=False)
+    assert r.present_fallback == 0 and r.ambiguous == ["<x@geopod>"]
+
+
+def test_ids_only_client_leaves_fallback_inert():
+    # Legacy ids_provider path carries no subject multiset, so behaviour matches
+    # the pre-fallback exact-only verify.
+    man = _manifest([{"message_id": "<a@x>", "entry_id": "1", "subject": "S"}])
+    r = verify(man, _client(set()))
+    assert r.present_fallback == 0 and r.missing == ["<a@x>"]
 
 
 # --- HTTP layer: rate-limit (429) resilience ---------------------------------

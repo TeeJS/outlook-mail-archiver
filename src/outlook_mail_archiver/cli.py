@@ -152,17 +152,29 @@ def cmd_verify(args) -> int:
     client = ArchiveClient(ma.base_url, ma.api_key, ma.import_account_id)
     result = verify(manifest, client)
     print("Per-message verification against the archive:")
-    print(f"  checked:              {result.checked}")
-    print(f"  present:              {result.present}")
-    print(f"  missing:              {len(result.missing)}")
-    print(f"  unresolved conflicts: {result.unresolved_conflicts}")
-    print(f"  query errors:         {len(result.errors)}")
-    print(f"  source failed:        {result.source_failed}")
-    print(f"  source folder errors: {result.source_errors}")
-    print(f"  degraded mail:        {result.source_degraded}")
-    print(f"  non-mail skipped:     {result.skipped_unsupported}")
+    print(f"  checked:               {result.checked}")
+    print(f"  present (Message-ID):  {result.present}")
+    print(f"  present (subject match): {result.present_fallback}")
+    print(f"  confirmed total:       {result.confirmed}")
+    print(f"  ambiguous (subject, no free copy): {len(result.ambiguous)}")
+    print(f"  missing (not in archive): {len(result.missing)}")
+    print(f"  unresolved conflicts:  {result.unresolved_conflicts}")
+    print(f"  query errors:          {len(result.errors)}")
+    print(f"  source failed:         {result.source_failed}")
+    print(f"  source folder errors:  {result.source_errors}")
+    print(f"  degraded mail:         {result.source_degraded}")
+    print(f"  non-mail skipped:      {result.skipped_unsupported}")
     for e in result.errors[:10]:
         print(f"    - {e}")
+    if result.present_fallback:
+        print("  note: 'present (subject match)' are messages found by subject, "
+              "not Message-ID — the archive re-derived their Message-ID on import "
+              "(e.g. SendGrid/Marketo ids). They ARE in the archive.")
+    if result.unresolved_conflicts:
+        print("  note: unresolved conflicts are distinct source messages that "
+              "share one Message-ID (often the same mail filed in multiple "
+              "folders); the archive keeps one copy, so the duplicates cannot be "
+              "individually confirmed.")
     if result.source_failed or result.source_errors or result.source_degraded:
         print("  note: the export was incomplete (failures, folder errors, or "
               "degraded mail); verification cannot report full success.")
