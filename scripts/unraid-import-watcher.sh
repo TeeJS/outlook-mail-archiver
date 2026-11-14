@@ -12,7 +12,7 @@
 set -u
 
 # ---- settings -------------------------------------------------------------
-CONTAINER="mail-archiver"                               # confirm: docker ps --format '{{.Names}}'
+CONTAINER="mail-archiver-sync"                         # confirm: docker ps --format '{{.Names}}'
 ACCOUNT_ID=3                                            # NWPIPE.COM import account
 DROP="/mnt/user/archives/outlook-email-archiver"       # host side of the dropbox share
 DLL="/app/MailArchiver.dll"                             # entrypoint inside the container

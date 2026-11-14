@@ -12,7 +12,7 @@ Dropbox share: `\\192.168.1.25\archives\outlook-email-archiver`
 
 ## 1. Unraid — mount the dropbox into the container
 
-In the Unraid web UI → **Docker** → click the **mail-archiver** container → **Edit**:
+In the Unraid web UI → **Docker** → click the **mail-archiver-sync** container → **Edit**:
 
 1. Click **Add another Path, Port, Variable, Label or Device** → Config Type **Path**.
    - **Name:** `Import Dropbox`
@@ -24,7 +24,7 @@ In the Unraid web UI → **Docker** → click the **mail-archiver** container �
 No environment variable is needed — `/app/imports` is in the shipped
 `LocalImport.AllowedPaths` by default.
 
-**Confirm the container name** (the watcher uses `mail-archiver`):
+**Confirm the container name** (the watcher uses `mail-archiver-sync`):
 ```bash
 docker ps --format '{{.Names}}'
 ```
@@ -32,7 +32,7 @@ If it differs, edit `CONTAINER=` at the top of the watcher script in step 2.
 
 **Confirm the CLI import exists** (safe — imports nothing, just prints usage):
 ```bash
-docker exec -w /app mail-archiver dotnet /app/MailArchiver.dll --import-eml
+docker exec -w /app mail-archiver-sync dotnet /app/MailArchiver.dll --import-eml
 ```
 Expect `ERROR: --file <path> is required for EML import`. That's success.
 
