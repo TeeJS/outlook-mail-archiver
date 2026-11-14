@@ -22,6 +22,8 @@ unit-tested; the live index path is exercised against a real instance.
 from __future__ import annotations
 
 import json
+import random
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -89,13 +91,22 @@ class ArchiveClient:
     """
 
     def __init__(self, base_url: str, api_key: str, account_id: int, *,
-                 ids_provider=None, timeout: float = 30.0, page_size: int = 100):
+                 ids_provider=None, timeout: float = 30.0, page_size: int = 100,
+                 throttle: float = 0.03, max_retries: int = 6,
+                 backoff_cap: float = 30.0, sleep=time.sleep):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.account_id = account_id
         self.timeout = timeout
         self.page_size = page_size
         self._ids_provider = ids_provider
+        # Rate-limit resilience: a light pause between requests keeps a large
+        # index (tens of thousands of detail GETs) under the archive's limiter,
+        # and 429/503 are retried with exponential backoff honouring Retry-After.
+        self.throttle = throttle
+        self.max_retries = max_retries
+        self.backoff_cap = backoff_cap
+        self._sleep = sleep
 
     def account_message_ids(self, from_date=None) -> set[str]:
         """Return the normalised Message-IDs the archive holds for the account.
@@ -107,16 +118,44 @@ class ArchiveClient:
             return self._ids_provider()
         return self._http_index(from_date)
 
+    @staticmethod
+    def _retry_after_seconds(exc: "urllib.error.HTTPError") -> float | None:
+        """Parse a Retry-After header (delta-seconds only) if present."""
+        try:
+            value = exc.headers.get("Retry-After") if exc.headers else None
+        except Exception:
+            value = None
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value.strip()))
+        except (TypeError, ValueError):
+            return None  # HTTP-date form is ignored; backoff is used instead
+
     def _get(self, path: str):  # pragma: no cover - live only
         req = urllib.request.Request(self.base_url + path, headers={
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
         })
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, json.JSONDecodeError, ValueError) as exc:
-            raise ArchiveError(f"archive request failed ({path}): {exc}") from exc
+        if self.throttle:
+            self._sleep(self.throttle)
+        attempt = 0
+        while True:
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                # 429 Too Many Requests / 503 Service Unavailable are transient:
+                # wait (Retry-After if given, else exponential backoff) and retry.
+                if exc.code in (429, 503) and attempt < self.max_retries:
+                    hinted = self._retry_after_seconds(exc)
+                    backoff = min(self.backoff_cap, (2 ** attempt) + random.random())
+                    self._sleep(hinted if hinted is not None else backoff)
+                    attempt += 1
+                    continue
+                raise ArchiveError(f"archive request failed ({path}): {exc}") from exc
+            except (urllib.error.URLError, json.JSONDecodeError, ValueError) as exc:
+                raise ArchiveError(f"archive request failed ({path}): {exc}") from exc
 
     def _http_index(self, from_date=None) -> set[str]:  # pragma: no cover - live only
         ids: set[str] = set()
