@@ -1,0 +1,35 @@
+# Mail-Archiver — Unraid Docker Compose (via the Docker Compose Manager plugin).
+#
+# Replaces the hand-edited Unraid XML template. It defines ONLY the mail-archiver
+# container and connects to your EXISTING Postgres container — do NOT add a db
+# service here: your archived mail lives in the current Postgres at
+# 192.168.1.25:5001, and a second one would start empty.
+#
+# Three values are secrets the Unraid UI masked, so paste them from your current
+# container's variables (Docker -> mail-archiver -> Edit): the DB username +
+# password (inside ConnectionStrings__DefaultConnection) and the admin password.
+#
+# After editing, bring it up with the Compose Manager plugin (Compose Up). The
+# image tracks :latest — never pin it.
+
+services:
+  mail-archiver:
+    image: s1t5/mailarchiver:latest
+    container_name: mail-archiver          # the import watcher targets this exact name
+    restart: unless-stopped
+    ports:
+      - "5150:5000"                        # host:container — 5150 is what your NPM Plus
+                                           # host for archive.schmitzplex.com forwards to
+                                           # (confirm it matches your current template)
+    environment:
+      # --- from your current container, fill the 3 masked secrets below ---
+      ConnectionStrings__DefaultConnection: "Host=192.168.1.25;Port=5001;Database=mailarchiver;Username=PASTE_DB_USER;Password=PASTE_DB_PASSWORD"
+      Authentication__Enabled: "true"
+      Authentication__Username: "admin"
+      Authentication__Password: "PASTE_ADMIN_PASSWORD"
+      TimeZone__DisplayTimeZoneId: "Etc/UTC"
+      # --- the two settings the sync needs (were missing after the recreate) ---
+      Api__Enabled: "true"                 # turns the REST API back on (fixes the 404)
+    volumes:
+      - /mnt/user/appdata/mailarchiver/data-protection-keys:/app/DataProtection-Keys
+      - /mnt/user/archives/outlook-email-archiver:/app/imports   # the import dropbox
