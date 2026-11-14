@@ -1,0 +1,6 @@
+# Shell scripts must keep LF endings — they run on Linux (Unraid). CRLF breaks
+# the shebang ("bad interpreter: /bin/bash^M").
+*.sh text eol=lf
+
+# PowerShell is Windows-side; CRLF is fine.
+*.ps1 text eol=crlf

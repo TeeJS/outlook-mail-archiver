@@ -264,6 +264,41 @@ def _as_int(value, default: int = 0) -> int:
         return default
 
 
+def confirmed_max_date(manifest: dict, result: "VerifyResult"):
+    """Newest received-date among exported messages confirmed present.
+
+    Everything the archive holds counts as confirmed — present by Message-ID,
+    present by subject fallback, and conflict / degraded / ambiguous items (all
+    of which ARE in the archive) — so only the strictly ``missing`` (the archive
+    holds nothing with that subject) are excluded. This is what the incremental
+    high-water mark advances to: a clean ``verified_success`` is too strict for
+    unattended sync (one cross-folder duplicate or degraded item would stall it
+    forever and re-export the whole mailbox nightly). The periodic ``--full``
+    sweep plus the overlap window are the backstop for anything skipped here.
+
+    Returns a ``datetime`` or ``None`` when nothing is confirmed.
+    """
+    from datetime import datetime
+
+    missing = set(result.missing)
+    newest = None
+    for m in manifest.get("messages", []):
+        if m.get("status") != "exported":
+            continue
+        if m.get("message_id") in missing:
+            continue
+        raw = m.get("date")
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        if newest is None or dt > newest:
+            newest = dt
+    return newest
+
+
 def verify(manifest: dict, client: ArchiveClient, *,
            fallback_subject: bool = True) -> VerifyResult:
     result = VerifyResult()

@@ -4,7 +4,8 @@ import urllib.error
 import pytest
 
 from outlook_mail_archiver.verify import (
-    ArchiveClient, ArchiveError, ArchiveIndex, verify,
+    ArchiveClient, ArchiveError, ArchiveIndex, VerifyResult,
+    confirmed_max_date, verify,
 )
 
 
@@ -144,6 +145,40 @@ def test_ids_only_client_leaves_fallback_inert():
     man = _manifest([{"message_id": "<a@x>", "entry_id": "1", "subject": "S"}])
     r = verify(man, _client(set()))
     assert r.present_fallback == 0 and r.missing == ["<a@x>"]
+
+
+# --- confirmed_max_date (incremental watermark advance) ----------------------
+
+def _m(mid, date, status="exported"):
+    return {"message_id": mid, "date": date, "status": status}
+
+
+def test_confirmed_max_date_uses_newest_present():
+    man = {"messages": [_m("<a>", "2026-01-01T00:00:00"),
+                        _m("<b>", "2026-03-01T00:00:00")]}
+    r = VerifyResult()  # nothing missing
+    assert confirmed_max_date(man, r).isoformat() == "2026-03-01T00:00:00"
+
+
+def test_confirmed_max_date_excludes_strict_missing():
+    # The newest message is strictly missing -> watermark must not advance to it.
+    man = {"messages": [_m("<a>", "2026-01-01T00:00:00"),
+                        _m("<late>", "2026-06-01T00:00:00")]}
+    r = VerifyResult(missing=["<late>"])
+    assert confirmed_max_date(man, r).isoformat() == "2026-01-01T00:00:00"
+
+
+def test_confirmed_max_date_counts_ambiguous_and_conflicts_as_present():
+    # ambiguous is NOT excluded (it is in the archive) -> it can set the mark.
+    man = {"messages": [_m("<a>", "2026-01-01T00:00:00"),
+                        _m("<amb>", "2026-09-01T00:00:00")]}
+    r = VerifyResult(ambiguous=["<amb>"])
+    assert confirmed_max_date(man, r).isoformat() == "2026-09-01T00:00:00"
+
+
+def test_confirmed_max_date_none_when_all_missing_or_dateless():
+    man = {"messages": [_m("<a>", None), _m("<b>", "bad-date")]}
+    assert confirmed_max_date(man, VerifyResult()) is None
 
 
 # --- HTTP layer: rate-limit (429) resilience ---------------------------------

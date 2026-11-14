@@ -181,32 +181,31 @@ def cmd_verify(args) -> int:
     if result.skipped_unsupported:
         print("  note: non-mail items were skipped by design (see manifest); "
               "they are not part of the mail transfer.")
+    # Advance the incremental high-water mark over everything confirmed present
+    # (not only on a clean verified_success — conflicts/degraded/ambiguous items
+    # are in the archive and must not stall unattended sync). Forward-only.
+    _advance_watermark(config, manifest, result)
     if result.verified_success:
         tail = (f" {result.skipped_unsupported} non-mail item(s) were excluded "
                 f"by design (not part of the mail transfer)."
                 if result.skipped_unsupported else "")
         print("  => VERIFIED: every EXPORTED mail message is present in the "
               f"archive.{tail}")
-        _advance_watermark(config, manifest)
         return 0
-    print("  => NOT verified. Do not treat the transfer as complete.", file=sys.stderr)
+    print("  => NOT verified (see tiers above). Mail confirmed present in the "
+          "archive is counted; the watermark advanced over it.", file=sys.stderr)
     return 1
 
 
-def _advance_watermark(config, manifest) -> None:
-    """On a verified import, move the incremental high-water mark to the newest
-    exported message date (it is now confirmed present in the archive)."""
-    from datetime import datetime
+def _advance_watermark(config, manifest, result) -> None:
+    """Move the incremental high-water mark to the newest CONFIRMED-present
+    message date. Strictly-missing messages are excluded so a genuine gap keeps
+    its date in the re-export window; conflicts/degraded/ambiguous count as
+    present. Forward-only (enforced by advance_high_water_mark)."""
     from .state import advance_high_water_mark
+    from .verify import confirmed_max_date
 
-    dates = []
-    for m in manifest.get("messages", []):
-        if m.get("status") == "exported" and m.get("date"):
-            try:
-                dates.append(datetime.fromisoformat(m["date"]))
-            except ValueError:
-                pass
-    newest = max(dates, default=None)
+    newest = confirmed_max_date(manifest, result)
     if newest is not None and config.mail_archiver.import_account_id:
         advance_high_water_mark(config.export.staging_dir,
                                 config.mail_archiver.import_account_id, newest)
