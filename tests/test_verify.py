@@ -181,6 +181,23 @@ def test_confirmed_max_date_none_when_all_missing_or_dateless():
     assert confirmed_max_date(man, VerifyResult()) is None
 
 
+def test_confirmed_max_date_none_when_index_failed():
+    # Archive unreachable -> errors set, missing empty. Must NOT treat every
+    # exported message as present (that poisoned the watermark to year 4501).
+    man = {"messages": [_m("<a>", "2026-01-01T00:00:00"),
+                        _m("<b>", "2026-03-01T00:00:00")]}
+    r = VerifyResult(errors=[{"error": "archive request failed: HTTP Error 404"}])
+    assert confirmed_max_date(man, r) is None
+
+
+def test_confirmed_max_date_ignores_future_garbage_dates():
+    # A degraded item with a year-4500 date must not set the watermark.
+    man = {"messages": [_m("<ok>", "2026-05-01T00:00:00"),
+                        _m("<junk>", "4500-12-31T00:00:00")]}
+    r = VerifyResult()  # nothing missing
+    assert confirmed_max_date(man, r).isoformat() == "2026-05-01T00:00:00"
+
+
 # --- HTTP layer: rate-limit (429) resilience ---------------------------------
 
 def _http_error(code, body=b"", retry_after=None):

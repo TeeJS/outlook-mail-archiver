@@ -280,6 +280,17 @@ def confirmed_max_date(manifest: dict, result: "VerifyResult"):
     """
     from datetime import datetime
 
+    # If the archive could not be indexed, ``missing`` is empty not because
+    # every message is present but because NOTHING was checked. Advancing the
+    # watermark here would skip the entire mailbox forever, so confirm nothing.
+    if result.errors:
+        return None
+
+    # A received date cannot be in the future. A degraded/corrupt item can carry
+    # a garbage date (e.g. year 4500) that, counted as "present", would poison
+    # the watermark and permanently stall incremental sync. Ignore such dates.
+    max_year = datetime.now().year + 1
+
     missing = set(result.missing)
     newest = None
     for m in manifest.get("messages", []):
@@ -293,6 +304,8 @@ def confirmed_max_date(manifest: dict, result: "VerifyResult"):
         try:
             dt = datetime.fromisoformat(raw)
         except ValueError:
+            continue
+        if dt.year > max_year:
             continue
         if newest is None or dt > newest:
             newest = dt

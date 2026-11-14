@@ -205,6 +205,14 @@ def _advance_watermark(config, manifest, result) -> None:
     from .state import advance_high_water_mark
     from .verify import confirmed_max_date
 
+    # Never advance on a run that could not reach the archive: query errors mean
+    # the index is empty, so NOTHING was actually confirmed. Advancing here would
+    # silently skip the whole mailbox on the next incremental run.
+    if result.errors:
+        print("  watermark NOT advanced: the archive could not be indexed "
+              "(see query errors above).", file=sys.stderr)
+        return
+
     newest = confirmed_max_date(manifest, result)
     if newest is not None and config.mail_archiver.import_account_id:
         advance_high_water_mark(config.export.staging_dir,
