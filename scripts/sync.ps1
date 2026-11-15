@@ -23,7 +23,8 @@ param(
     [string]$StagingDir = 'D:\mail-archive-staging',
     [string]$Share      = '\\192.168.1.25\archives\outlook-email-archiver',
     [string]$LogDir     = 'D:\mail-archive-staging\sync-logs',
-    [switch]$Full        # monthly backstop: export EVERYTHING (ignores the watermark)
+    [switch]$Full,       # monthly backstop: export EVERYTHING (ignores the watermark)
+    [switch]$SkipVerify  # skip verifying the previous package (go straight to export+drop)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,7 +63,12 @@ try {
     #    conflicted even though the mail is present, so it is logged, never fatal.
     $prev = Get-ChildItem $StagingDir -Directory -Filter 'export-*' -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($prev) {
+    if ($SkipVerify) {
+        # One-off: skip the (potentially long) verify of the previous package and
+        # go straight to export+drop. The next scheduled run verifies normally;
+        # the overlap window and dedup mean nothing is lost by skipping once.
+        Log "verify SKIPPED (-SkipVerify); previous package not re-checked this run"
+    } elseif ($prev) {
         Log "verify previous package: $($prev.Name)"
         $rc = Invoke-Cli @('verify', $prev.FullName)
         Log "verify exit=$rc"
